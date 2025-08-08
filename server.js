@@ -19,11 +19,12 @@ if (!MONGO_URI) {
   process.exit(1);
 }
 
-// Connect to MongoDB
+// Connect to MongoDB with default options (as useNewUrlParser and useUnifiedTopology are deprecated)
 mongoose.connect(MONGO_URI)
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.log('❌ MongoDB connection error:', err));
 
+// Define message schema
 const messageSchema = new mongoose.Schema({
   id: { type: String, unique: true },
   from: String,
@@ -35,9 +36,10 @@ const messageSchema = new mongoose.Schema({
   type: String
 });
 
+// Define message model
 const Message = mongoose.model('processed_messages', messageSchema);
 
-// Process payload function
+// Process webhook payload by inserting or updating messages and statuses
 async function processPayload(payload) {
   if (!payload?.metaData?.entry) return;
 
@@ -56,12 +58,14 @@ async function processPayload(payload) {
             status: 'sent',
             type: msg.type
           };
+          // Upsert message if not exists
           await Message.updateOne({ id: data.id }, { $setOnInsert: data }, { upsert: true });
         }
       }
 
       if (val.statuses) {
         for (const statusObj of val.statuses) {
+          // Update message status and timestamp
           await Message.updateOne(
             { id: statusObj.id },
             { $set: { status: statusObj.status, status_time: statusObj.timestamp } }
@@ -72,7 +76,7 @@ async function processPayload(payload) {
   }
 }
 
-// Endpoint to process payload files
+// Endpoint to process all payload JSON files from 'payloads' folder
 app.get('/process-payloads', async (req, res) => {
   const payloadFolder = path.join(__dirname, 'payloads');
   try {
@@ -89,12 +93,18 @@ app.get('/process-payloads', async (req, res) => {
   }
 });
 
-// Get conversations
+// Endpoint to list conversations grouped by wa_id with last message and timestamp
 app.get('/conversations', async (req, res) => {
   try {
     const conversations = await Message.aggregate([
       { $sort: { timestamp: -1 } },
-      { $group: { _id: '$wa_id', lastMessage: { $first: '$text' }, lastTimestamp: { $first: '$timestamp' }, from: { $first: '$from' } } },
+      { $group: {
+          _id: '$wa_id',
+          lastMessage: { $first: '$text' },
+          lastTimestamp: { $first: '$timestamp' },
+          from: { $first: '$from' }
+        }
+      },
       { $sort: { lastTimestamp: -1 } }
     ]);
     res.json(conversations);
@@ -103,7 +113,7 @@ app.get('/conversations', async (req, res) => {
   }
 });
 
-// Get messages for a wa_id
+// Endpoint to get all messages for a specific wa_id, sorted by time
 app.get('/messages/:wa_id', async (req, res) => {
   try {
     const messages = await Message.find({ wa_id: req.params.wa_id }).sort({ timestamp: 1 });
@@ -113,7 +123,7 @@ app.get('/messages/:wa_id', async (req, res) => {
   }
 });
 
-// Send a new message (store only)
+// Endpoint to send (store) a new message for wa_id
 app.post('/messages/:wa_id', async (req, res) => {
   const { text } = req.body;
   if (!text) return res.status(400).send({ error: 'Message text required' });
@@ -121,8 +131,8 @@ app.post('/messages/:wa_id', async (req, res) => {
   try {
     const timestamp = Math.floor(Date.now() / 1000);
     const newMsg = new Message({
-      id: `local-${timestamp}-${req.params.wa_id}`,
-      from: '916369114503', // Your business number
+      id: `local-${timestamp}-${req.params.wa_id}`, // unique local ID
+      from: '916369114503', // Your business number, update if needed
       wa_id: req.params.wa_id,
       text,
       timestamp,
@@ -136,5 +146,6 @@ app.post('/messages/:wa_id', async (req, res) => {
   }
 });
 
+// Start server on specified port and bind to 0.0.0.0 for cloud hosting compatibility
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server started on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server started on port ${PORT}`));
